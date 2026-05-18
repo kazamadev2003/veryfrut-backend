@@ -60,6 +60,21 @@ export class OrdersController {
   }
 
   // 🔹 Ruta dinámica al final
+  @Get('deleted')
+  findDeleted(@Query() query: PaginationQueryDto) {
+    return this.ordersService.findDeleted(query);
+  }
+
+  @Get('deleted/:id')
+  findDeletedOne(@Param('id') id: string) {
+    return this.ordersService.findDeletedOne(+id);
+  }
+
+  @Post('deleted/:id/restore')
+  restoreDeleted(@Param('id') id: string) {
+    return this.ordersService.restoreDeleted(+id);
+  }
+
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.ordersService.findOne(+id);
