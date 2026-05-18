@@ -58,6 +58,22 @@ type DeletedOrderWithItems = Prisma.DeletedOrderGetPayload<{
   include: typeof deletedOrderInclude;
 }>;
 
+type DeletedOrderItemWithData = Omit<
+  DeletedOrderWithItems['deletedOrderItems'][number],
+  never
+> & {
+  product: OrderWithRelations['orderItems'][number]['product'] | null;
+  unitMeasurement:
+    | OrderWithRelations['orderItems'][number]['unitMeasurement']
+    | null;
+};
+
+type DeletedOrderWithData = Omit<DeletedOrderWithItems, 'deletedOrderItems'> & {
+  area: OrderWithRelations['area'] | null;
+  User: OrderWithRelations['User'] | null;
+  deletedOrderItems: DeletedOrderItemWithData[];
+};
+
 /**
  * Campos Perú extra
  */
@@ -79,7 +95,7 @@ type OrderWithPeru = Omit<OrderWithRelations, 'createdAt' | 'updatedAt'> & {
 } & PeruDateFields;
 
 type DeletedOrderWithPeru = Omit<
-  DeletedOrderWithItems,
+  DeletedOrderWithData,
   'originalCreatedAt' | 'originalUpdatedAt' | 'deletedAt'
 > & {
   originalCreatedAt: string;
@@ -180,7 +196,7 @@ export class OrdersService {
   }
 
   private addDeletedOrderPeruFields(
-    order: DeletedOrderWithItems,
+    order: DeletedOrderWithData,
   ): DeletedOrderWithPeru {
     const originalCreatedAtPeruDate = formatInTimeZone(
       order.originalCreatedAt,
@@ -213,6 +229,79 @@ export class OrdersService {
       originalCreatedAtPeruDate,
       originalCreatedAtPeruTime,
     };
+  }
+
+  private uniqueNumbers(values: Array<number | null | undefined>): number[] {
+    return [...new Set(values.filter((value): value is number => !!value))];
+  }
+
+  private async hydrateDeletedOrders(
+    orders: DeletedOrderWithItems[],
+  ): Promise<DeletedOrderWithData[]> {
+    if (orders.length === 0) return [];
+
+    const areaIds = this.uniqueNumbers(orders.map((order) => order.areaId));
+    const userIds = this.uniqueNumbers(orders.map((order) => order.userId));
+    const productIds = this.uniqueNumbers(
+      orders.flatMap((order) =>
+        order.deletedOrderItems.map((item) => item.productId),
+      ),
+    );
+    const unitMeasurementIds = this.uniqueNumbers(
+      orders.flatMap((order) =>
+        order.deletedOrderItems.map((item) => item.unitMeasurementId),
+      ),
+    );
+
+    const [areas, users, products, unitMeasurements] = await Promise.all([
+      this.prisma.area.findMany({
+        where: { id: { in: areaIds } },
+        include: { company: true },
+      }),
+      this.prisma.user.findMany({
+        where: { id: { in: userIds } },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          address: true,
+          role: true,
+        },
+      }),
+      this.prisma.product.findMany({
+        where: { id: { in: productIds } },
+        include: { category: true },
+      }),
+      this.prisma.unitMeasurement.findMany({
+        where: { id: { in: unitMeasurementIds } },
+      }),
+    ]);
+
+    const areaById = new Map(areas.map((area) => [area.id, area]));
+    const userById = new Map(users.map((user) => [user.id, user]));
+    const productById = new Map(
+      products.map((product) => [product.id, product]),
+    );
+    const unitMeasurementById = new Map(
+      unitMeasurements.map((unitMeasurement) => [
+        unitMeasurement.id,
+        unitMeasurement,
+      ]),
+    );
+
+    return orders.map((order) => ({
+      ...order,
+      area: areaById.get(order.areaId) ?? null,
+      User: order.userId ? (userById.get(order.userId) ?? null) : null,
+      deletedOrderItems: order.deletedOrderItems.map((item) => ({
+        ...item,
+        product: productById.get(item.productId) ?? null,
+        unitMeasurement:
+          unitMeasurementById.get(item.unitMeasurementId) ?? null,
+      })),
+    }));
   }
 
   // ✅ Type-guards sin any
@@ -582,9 +671,11 @@ export class OrdersService {
       countArgs: { where },
     });
 
+    const hydratedOrders = await this.hydrateDeletedOrders(result.data);
+
     return {
       ...result,
-      data: result.data.map((o) => this.addDeletedOrderPeruFields(o)),
+      data: hydratedOrders.map((o) => this.addDeletedOrderPeruFields(o)),
     };
   }
 
@@ -600,7 +691,9 @@ export class OrdersService {
       throw new NotFoundException(`Orden eliminada con ID ${id} no encontrada`);
     }
 
-    return this.addDeletedOrderPeruFields(deletedOrder);
+    const [hydratedOrder] = await this.hydrateDeletedOrders([deletedOrder]);
+
+    return this.addDeletedOrderPeruFields(hydratedOrder);
   }
 
   async restoreDeleted(id: number): Promise<OrderWithPeru> {
