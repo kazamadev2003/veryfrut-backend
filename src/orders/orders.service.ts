@@ -540,7 +540,7 @@ export class OrdersService {
   // ---------------------------------------------------------------------------
   // DELETE
   // ---------------------------------------------------------------------------
-  async remove(id: number): Promise<void> {
+  async remove(id: number, deletedByRole?: string): Promise<void> {
     const existingOrder = await this.prisma.order.findUnique({
       where: { id },
       include: {
@@ -550,6 +550,16 @@ export class OrdersService {
 
     if (!existingOrder)
       throw new NotFoundException(`Orden con ID ${id} no encontrada`);
+
+    const shouldArchive = deletedByRole?.toLowerCase() === 'admin';
+
+    if (!shouldArchive) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.orderItem.deleteMany({ where: { orderId: id } });
+        await tx.order.delete({ where: { id } });
+      });
+      return;
+    }
 
     const alreadyArchived = await this.prisma.deletedOrder.findUnique({
       where: { originalOrderId: id },
@@ -777,6 +787,23 @@ export class OrdersService {
 
       throw error;
     }
+  }
+
+  async removeDeleted(id: number): Promise<{ message: string }> {
+    if (!id) throw new BadRequestException('El ID es obligatorio');
+
+    const deletedOrder = await this.prisma.deletedOrder.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+
+    if (!deletedOrder) {
+      throw new NotFoundException(`Orden eliminada con ID ${id} no encontrada`);
+    }
+
+    await this.prisma.deletedOrder.delete({ where: { id } });
+
+    return { message: `Orden eliminada con ID ${id} borrada definitivamente` };
   }
 
   // ---------------------------------------------------------------------------
