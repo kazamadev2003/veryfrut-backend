@@ -2,6 +2,7 @@
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { PaginationService } from 'src/common/pagination/pagination.service';
@@ -111,6 +112,7 @@ type WithData<T> = { data: T[] };
 @Injectable()
 export class OrdersService {
   private readonly peruTz = 'America/Lima';
+  private readonly orderClosingHour = 21;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -363,10 +365,24 @@ export class OrdersService {
     return !!existingOrder;
   }
 
+  private ensureOrderWindowIsOpen(): void {
+    const hourInPeru = Number(
+      formatInTimeZone(new Date(), this.peruTz, 'H'),
+    );
+
+    if (hourInPeru >= this.orderClosingHour) {
+      throw new ForbiddenException(
+        'El horario de pedidos ya cerró. Comunícate con el administrador al 987 801 148.',
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // CREATE
   // ---------------------------------------------------------------------------
   async create(dto: CreateOrderDto): Promise<OrderWithPeru> {
+    this.ensureOrderWindowIsOpen();
+
     const todayPeruDate = formatInTimeZone(
       new Date(),
       this.peruTz,
