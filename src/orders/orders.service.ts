@@ -112,7 +112,8 @@ type WithData<T> = { data: T[] };
 @Injectable()
 export class OrdersService {
   private readonly peruTz = 'America/Lima';
-  private readonly orderClosingHour = 21;
+  private readonly orderOpeningTime = '06:00';
+  private readonly orderClosingTime = '21:30';
 
   constructor(
     private readonly prisma: PrismaService,
@@ -366,13 +367,14 @@ export class OrdersService {
   }
 
   private ensureOrderWindowIsOpen(): void {
-    const hourInPeru = Number(
-      formatInTimeZone(new Date(), this.peruTz, 'H'),
-    );
+    const timeInPeru = formatInTimeZone(new Date(), this.peruTz, 'HH:mm');
 
-    if (hourInPeru >= this.orderClosingHour) {
+    if (
+      timeInPeru < this.orderOpeningTime ||
+      timeInPeru >= this.orderClosingTime
+    ) {
       throw new ForbiddenException(
-        'El horario de pedidos ya cerró. Comunícate con el administrador al 987 801 148.',
+        'La recepción de pedidos está disponible desde las 6:00 a. m. Comunícate con el administrador al 987 801 148.',
       );
     }
   }
@@ -380,8 +382,13 @@ export class OrdersService {
   // ---------------------------------------------------------------------------
   // CREATE
   // ---------------------------------------------------------------------------
-  async create(dto: CreateOrderDto): Promise<OrderWithPeru> {
-    this.ensureOrderWindowIsOpen();
+  async create(
+    dto: CreateOrderDto,
+    userRole?: string,
+  ): Promise<OrderWithPeru> {
+    if (userRole !== 'admin') {
+      this.ensureOrderWindowIsOpen();
+    }
 
     const todayPeruDate = formatInTimeZone(
       new Date(),

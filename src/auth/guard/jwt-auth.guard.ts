@@ -7,9 +7,9 @@ import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 
 interface DecodedUser {
-  id: string;
+  sub: number;
   email: string;
-  // Otros campos que el JWT pueda incluir
+  role: string;
 }
 
 @Injectable()
