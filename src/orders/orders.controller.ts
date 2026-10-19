@@ -40,6 +40,12 @@ export class OrdersController {
     return this.ordersService.create(createOrderDto, req.user?.role);
   }
 
+  @Get('follow-up')
+  @UseGuards(JwtAuthGuard)
+  followUp(@Query('date') date: string, @Req() req: AuthenticatedRequest) {
+    return this.ordersService.followUp(date, req.user?.role);
+  }
+
   @Get()
   findAll(@Query() query: PaginationQueryDto) {
     return this.ordersService.findAll(query);
