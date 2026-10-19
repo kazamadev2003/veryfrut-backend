@@ -98,6 +98,7 @@ model Order {
   totalAmount Float
   status      String // Ej: "created", "delivered", etc.
   observation String? // <- Campo agregado
+  scheduledFor DateTime @db.Date
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt      @db.Timestamptz(3)
 
@@ -131,6 +132,7 @@ model DeletedOrder {
   totalAmount       Float
   status            String
   observation       String?
+  scheduledFor      DateTime @db.Date
   originalCreatedAt DateTime @db.Timestamptz(3)
   originalUpdatedAt DateTime @db.Timestamptz(3)
   deletedAt         DateTime @default(now()) @db.Timestamptz(3)

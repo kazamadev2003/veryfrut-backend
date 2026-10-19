@@ -346,19 +346,14 @@ export class OrdersService {
     return res as unknown as PaginatedResponse<OrderWithPeru>;
   }
 
-  private async existsOrderInPeruDate(
+  private async existsOrderForScheduledDate(
     areaId: number,
     peruDate: string,
   ): Promise<boolean> {
-    const { startUtc, nextDayUtc } = this.getPeruDayRangeUtc(peruDate);
-
     const existingOrder = await this.prisma.order.findFirst({
       where: {
         areaId,
-        createdAt: {
-          gte: startUtc,
-          lt: nextDayUtc,
-        },
+        scheduledFor: new Date(`${peruDate}T00:00:00.000Z`),
       },
       select: { id: true },
     });
@@ -386,24 +381,35 @@ export class OrdersService {
     dto: CreateOrderDto,
     userRole?: string,
   ): Promise<OrderWithPeru> {
-    if (userRole !== 'admin') {
-      this.ensureOrderWindowIsOpen();
-    }
-
     const todayPeruDate = formatInTimeZone(
       new Date(),
       this.peruTz,
       'yyyy-MM-dd',
     );
 
-    const alreadyExistsForArea = await this.existsOrderInPeruDate(
+    if (userRole !== 'admin') {
+      this.ensureOrderWindowIsOpen();
+    }
+
+    const scheduledFor =
+      userRole === 'admin' && dto.scheduledFor
+        ? this.normalizeToPeruDate(dto.scheduledFor)
+        : todayPeruDate;
+
+    if (scheduledFor < todayPeruDate) {
+      throw new BadRequestException(
+        'No se pueden crear pedidos para fechas pasadas.',
+      );
+    }
+
+    const alreadyExistsForArea = await this.existsOrderForScheduledDate(
       dto.areaId,
-      todayPeruDate,
+      scheduledFor,
     );
 
     if (alreadyExistsForArea) {
       throw new BadRequestException(
-        `Ya existe una orden registrada para el area ${dto.areaId} en la fecha ${todayPeruDate}.`,
+        `Ya existe una orden registrada para el area ${dto.areaId} en la fecha ${scheduledFor}.`,
       );
     }
 
@@ -414,6 +420,7 @@ export class OrdersService {
         totalAmount: dto.totalAmount,
         status: dto.status,
         observation: dto.observation,
+        scheduledFor: new Date(`${scheduledFor}T00:00:00.000Z`),
         orderItems: {
           create: dto.orderItems.map((item) => ({
             productId: item.productId,
@@ -604,6 +611,7 @@ export class OrdersService {
           totalAmount: existingOrder.totalAmount,
           status: existingOrder.status,
           observation: existingOrder.observation,
+          scheduledFor: existingOrder.scheduledFor,
           originalCreatedAt: existingOrder.createdAt,
           originalUpdatedAt: existingOrder.updatedAt,
           deletedOrderItems: {
@@ -752,19 +760,19 @@ export class OrdersService {
       );
     }
 
-    const peruDate = formatInTimeZone(
-      deletedOrder.originalCreatedAt,
-      this.peruTz,
+    const scheduledFor = formatInTimeZone(
+      deletedOrder.scheduledFor,
+      'UTC',
       'yyyy-MM-dd',
     );
-    const alreadyExistsForArea = await this.existsOrderInPeruDate(
+    const alreadyExistsForArea = await this.existsOrderForScheduledDate(
       deletedOrder.areaId,
-      peruDate,
+      scheduledFor,
     );
 
     if (alreadyExistsForArea) {
       throw new BadRequestException(
-        `Ya existe una orden activa para el area ${deletedOrder.areaId} en la fecha ${peruDate}.`,
+        `Ya existe una orden activa para el area ${deletedOrder.areaId} en la fecha ${scheduledFor}.`,
       );
     }
 
@@ -777,7 +785,8 @@ export class OrdersService {
             areaId: deletedOrder.areaId,
             totalAmount: deletedOrder.totalAmount,
             status: deletedOrder.status,
-            observation: deletedOrder.observation,
+          observation: deletedOrder.observation,
+          scheduledFor: deletedOrder.scheduledFor,
             createdAt: deletedOrder.originalCreatedAt,
             updatedAt: deletedOrder.originalUpdatedAt,
             orderItems: {
@@ -851,8 +860,57 @@ export class OrdersService {
     }
 
     const peruDate = this.normalizeToPeruDate(date.trim());
-    const exists = await this.existsOrderInPeruDate(areaIdNum, peruDate);
+    const exists = await this.existsOrderForScheduledDate(areaIdNum, peruDate);
     return { exists };
+  }
+
+  async followUp(date: string, userRole?: string) {
+    if (userRole !== 'admin') {
+      throw new ForbiddenException('Solo los administradores pueden ver el seguimiento de pedidos.');
+    }
+
+    const peruDate = this.normalizeToPeruDate(date);
+    const selectedDate = new Date(`${peruDate}T00:00:00.000Z`);
+
+    const [users, ordersForDate, futureOrders] = await Promise.all([
+      this.prisma.user.findMany({
+        where: { role: 'customer' },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          areas: { include: { company: true } },
+        },
+        orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
+      }),
+      this.prisma.order.findMany({
+        where: { scheduledFor: selectedDate },
+        include: fullOrderInclude,
+      }),
+      this.prisma.order.findMany({
+        where: { scheduledFor: { gt: selectedDate } },
+        include: fullOrderInclude,
+        orderBy: { scheduledFor: 'asc' },
+      }),
+    ]);
+
+    const orderByAreaId = new Map(
+      ordersForDate.map((order) => [order.areaId, this.addPeruFields(order)]),
+    );
+
+    return {
+      date: peruDate,
+      users: users.map(({ areas, ...user }) => ({
+        ...user,
+        areas: areas.map((area) => ({
+          ...area,
+          order: orderByAreaId.get(area.id) ?? null,
+        })),
+      })),
+      futureOrders: futureOrders.map((order) => this.addPeruFields(order)),
+    };
   }
 
   // ---------------------------------------------------------------------------
