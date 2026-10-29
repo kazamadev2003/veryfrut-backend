@@ -35,8 +35,11 @@ export class JwtAuthGuard {
       const decoded = this.jwtService.verify<DecodedUser>(token);
       request.user = decoded;
       return true;
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Token verification failed:', err);
+      if (err instanceof Error && err.name === 'TokenExpiredError') {
+        throw new UnauthorizedException('Token expired');
+      }
       throw new UnauthorizedException('Invalid token');
     }
   }
