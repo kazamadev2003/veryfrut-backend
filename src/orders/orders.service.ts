@@ -543,12 +543,42 @@ export class OrdersService {
       );
     }
 
+    const scheduledFor = dto.scheduledFor
+      ? this.normalizeToPeruDate(dto.scheduledFor)
+      : undefined;
+
+    if (scheduledFor && scheduledFor < nowPeruDate) {
+      throw new BadRequestException(
+        'No se pueden programar pedidos para fechas pasadas.',
+      );
+    }
+
+    if (scheduledFor) {
+      const conflictingOrder = await this.prisma.order.findFirst({
+        where: {
+          id: { not: id },
+          areaId: existingOrder.areaId,
+          scheduledFor: new Date(`${scheduledFor}T00:00:00.000Z`),
+        },
+        select: { id: true },
+      });
+
+      if (conflictingOrder) {
+        throw new BadRequestException(
+          `Ya existe una orden registrada para el area ${existingOrder.areaId} en la fecha ${scheduledFor}.`,
+        );
+      }
+    }
+
     const updated = await this.prisma.order.update({
       where: { id },
       data: {
         totalAmount: dto.totalAmount,
         status: dto.status,
         observation: dto.observation,
+        scheduledFor: scheduledFor
+          ? new Date(`${scheduledFor}T00:00:00.000Z`)
+          : undefined,
         orderItems: dto.orderItems
           ? {
               deleteMany: {},
